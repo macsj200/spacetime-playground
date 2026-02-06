@@ -217,10 +217,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let sin_angle = sqrt(max(1.0 - cos_angle * cos_angle, 0.0));
 
     // Initial conditions for geodesic integration
+    // u = 1/r, w = du/dφ
+    // Derivation: dr/dφ = r·cos_angle/sin_angle, du/dφ = (-1/r²)·dr/dφ = -cos_angle/(r·sin_angle)
+    // For inward rays (cos_angle < 0): w > 0, meaning u increases (r decreases) ✓
     var u_val = 1.0 / cam_r;
     var w_val = 0.0;
     if sin_angle > 1e-6 {
-        w_val = cos_angle / (cam_r * sin_angle);
+        w_val = -cos_angle / (cam_r * sin_angle);
     }
 
     // Tangent vector in orbital plane (perpendicular to r_hat, in ray direction)
@@ -242,15 +245,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var hit_disk = false;
     var disk_r = 0.0;
     var disk_azimuth = 0.0;
+
+    // The exit direction uses (-r_hat, tangent) basis with this initial angle
     let initial_angle = atan2(sin_angle, -cos_angle);
 
-    // Track y-component of 3D position for equatorial plane crossings
-    var prev_y = 0.0;
-    {
-        let pos_angle = initial_angle;
-        let pos_3d = (1.0 / u_val) * (cos(pos_angle) * (-r_hat) + sin(pos_angle) * tangent);
-        prev_y = pos_3d.y;
-    }
+    // Track y-component of ray POSITION for equatorial plane crossings.
+    // Position at orbit angle φ: pos = (1/u) * (cos(φ)*r_hat + sin(φ)*tangent)
+    // At φ=0 the ray is at the camera: cam_r * r_hat = cam_pos
+    var prev_y = cam_pos.y;
 
     // RK4 integration
     for (var i = 0u; i < u.max_steps; i = i + 1u) {
@@ -289,10 +291,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         phi_total = phi_total + dphi;
 
         // Check for accretion disk crossing (equatorial plane y=0)
+        // Position at orbit angle φ: pos = r * (cos(φ)*r_hat + sin(φ)*tangent)
         if u.disk_enabled == 1u && !hit_disk {
-            let current_angle = initial_angle + phi_total;
             let r_now = 1.0 / max(u_val, 1e-8);
-            let pos_3d = r_now * (cos(current_angle) * (-r_hat) + sin(current_angle) * tangent);
+            let pos_3d = r_now * (cos(phi_total) * r_hat + sin(phi_total) * tangent);
             let cur_y = pos_3d.y;
 
             if prev_y * cur_y < 0.0 {

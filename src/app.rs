@@ -83,7 +83,8 @@ impl App {
         surface.configure(&device, &config);
 
         let pipeline = RayMarchPipeline::new(&device, surface_format, width, height);
-        let camera = OrbitalCamera::new(10.0, 0.5, std::f32::consts::FRAC_PI_2);
+        // Start ~20° above the equatorial plane for a good view of the accretion disk
+        let camera = OrbitalCamera::new(10.0, 0.5, 1.2);
 
         let egui_ctx = egui::Context::default();
         let egui_winit = egui_winit::State::new(

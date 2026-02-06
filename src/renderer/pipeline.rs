@@ -8,7 +8,7 @@ pub struct RayMarchPipeline {
     pub compute_bind_group: wgpu::BindGroup,
     pub render_bind_group: wgpu::BindGroup,
     pub uniform_buffer: wgpu::Buffer,
-    pub output_texture: wgpu::Texture,
+    _output_texture: wgpu::Texture,
     pub texture_size: (u32, u32),
 }
 
@@ -210,7 +210,7 @@ impl RayMarchPipeline {
             compute_bind_group,
             render_bind_group,
             uniform_buffer,
-            output_texture,
+            _output_texture: output_texture,
             texture_size: (width, height),
         }
     }
