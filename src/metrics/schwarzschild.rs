@@ -22,4 +22,9 @@ impl SchwarzschildParams {
     pub fn photon_sphere_radius(&self) -> f32 {
         1.5 * self.rs
     }
+
+    /// Innermost stable circular orbit: r_isco = 3 * rs
+    pub fn isco_radius(&self) -> f32 {
+        3.0 * self.rs
+    }
 }

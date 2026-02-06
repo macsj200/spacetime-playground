@@ -12,7 +12,12 @@ pub struct Uniforms {
     pub rs: f32,
     pub max_steps: u32,
     pub step_size: f32,
-    pub _padding: [f32; 2],
+    pub disk_enabled: u32,
+    pub disk_inner: f32,
+    pub disk_outer: f32,
+    pub background_mode: u32,
+    pub time: f32,
+    pub _padding: f32,
 }
 
 impl Default for Uniforms {
@@ -27,7 +32,12 @@ impl Default for Uniforms {
             rs: 1.0,
             max_steps: 300,
             step_size: 0.01,
-            _padding: [0.0; 2],
+            disk_enabled: 1,
+            disk_inner: 3.0,
+            disk_outer: 15.0,
+            background_mode: 0,
+            time: 0.0,
+            _padding: 0.0,
         }
     }
 }

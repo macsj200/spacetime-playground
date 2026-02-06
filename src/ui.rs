@@ -3,14 +3,20 @@ use crate::renderer::camera::OrbitalCamera;
 
 pub struct UiState {
     pub show_ui: bool,
-    pub use_checkerboard: bool,
+    pub background_mode: u32, // 0 = checkerboard, 1 = star field
+    pub disk_enabled: bool,
+    pub disk_inner: f32,
+    pub disk_outer: f32,
 }
 
 impl Default for UiState {
     fn default() -> Self {
         Self {
             show_ui: true,
-            use_checkerboard: true,
+            background_mode: 1,
+            disk_enabled: true,
+            disk_inner: 3.0,
+            disk_outer: 15.0,
         }
     }
 }
@@ -43,6 +49,10 @@ pub fn draw_ui(
                 "Critical impact param: b = {:.2}",
                 params.critical_impact_parameter()
             ));
+            ui.label(format!(
+                "ISCO: r = {:.2}",
+                params.isco_radius()
+            ));
 
             ui.separator();
             ui.heading("Camera");
@@ -55,6 +65,21 @@ pub fn draw_ui(
                 egui::Slider::new(&mut camera.fov, 0.2..=2.5)
                     .text("FOV (radians)"),
             );
+
+            ui.separator();
+            ui.heading("Accretion Disk");
+            ui.checkbox(&mut ui_state.disk_enabled, "Enable accretion disk");
+            if ui_state.disk_enabled {
+                // Snap inner radius to ISCO by default
+                ui.add(
+                    egui::Slider::new(&mut ui_state.disk_inner, 1.5..=10.0)
+                        .text("Inner radius"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut ui_state.disk_outer, 5.0..=30.0)
+                        .text("Outer radius"),
+                );
+            }
 
             ui.separator();
             ui.heading("Integration");
@@ -70,6 +95,10 @@ pub fn draw_ui(
 
             ui.separator();
             ui.heading("Rendering");
-            ui.checkbox(&mut ui_state.use_checkerboard, "Checkerboard background");
+            ui.horizontal(|ui| {
+                ui.label("Background:");
+                ui.selectable_value(&mut ui_state.background_mode, 0, "Checkerboard");
+                ui.selectable_value(&mut ui_state.background_mode, 1, "Star field");
+            });
         });
 }

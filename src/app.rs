@@ -26,6 +26,7 @@ pub struct App {
     egui_renderer: egui_wgpu::Renderer,
     window: Arc<Window>,
     last_frame_time: std::time::Instant,
+    start_time: std::time::Instant,
 }
 
 impl App {
@@ -111,6 +112,7 @@ impl App {
             egui_renderer,
             window,
             last_frame_time: std::time::Instant::now(),
+            start_time: std::time::Instant::now(),
         }
     }
 
@@ -201,7 +203,12 @@ impl App {
             rs: self.params.rs,
             max_steps: self.max_steps,
             step_size: self.step_size,
-            _padding: [0.0; 2],
+            disk_enabled: if self.ui_state.disk_enabled { 1 } else { 0 },
+            disk_inner: self.ui_state.disk_inner,
+            disk_outer: self.ui_state.disk_outer,
+            background_mode: self.ui_state.background_mode,
+            time: self.start_time.elapsed().as_secs_f32(),
+            _padding: 0.0,
         };
         self.pipeline.update_uniforms(&self.queue, &uniforms);
 
