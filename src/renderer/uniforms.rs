@@ -1,0 +1,33 @@
+use bytemuck::{Pod, Zeroable};
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Pod, Zeroable)]
+pub struct Uniforms {
+    pub camera_pos: [f32; 4],
+    pub camera_forward: [f32; 4],
+    pub camera_up: [f32; 4],
+    pub camera_right: [f32; 4],
+    pub resolution: [f32; 2],
+    pub fov: f32,
+    pub rs: f32,
+    pub max_steps: u32,
+    pub step_size: f32,
+    pub _padding: [f32; 2],
+}
+
+impl Default for Uniforms {
+    fn default() -> Self {
+        Self {
+            camera_pos: [0.0, 0.0, 10.0, 0.0],
+            camera_forward: [0.0, 0.0, -1.0, 0.0],
+            camera_up: [0.0, 1.0, 0.0, 0.0],
+            camera_right: [1.0, 0.0, 0.0, 0.0],
+            resolution: [800.0, 600.0],
+            fov: 1.0,
+            rs: 1.0,
+            max_steps: 300,
+            step_size: 0.01,
+            _padding: [0.0; 2],
+        }
+    }
+}
