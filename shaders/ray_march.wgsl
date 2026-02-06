@@ -156,31 +156,28 @@ fn blackbody(temp: f32) -> vec3<f32> {
     return vec3<f32>(r, g, b);
 }
 
-// Procedural disk detail: rings, spiral structure, turbulence
+// Procedural disk detail: subtle density variations
 fn disk_detail(r: f32, azimuth: f32, rs: f32) -> f32 {
-    let rn = r / rs; // normalized radius
+    let rn = r / rs;
     var detail = 1.0;
 
-    // Concentric ring structure (density waves)
-    detail *= 0.85 + 0.15 * sin(rn * 25.0);
-    detail *= 0.92 + 0.08 * sin(rn * 63.0 + 1.3);
-    detail *= 0.96 + 0.04 * sin(rn * 150.0 + 0.7);
+    // Subtle broad ring variations (not sharp bands)
+    detail *= 0.95 + 0.05 * sin(rn * 6.0);
+    detail *= 0.97 + 0.03 * sin(rn * 15.0 + 2.0);
 
-    // Spiral density waves
-    let spiral1 = sin(azimuth * 2.0 - rn * 5.0 + u.time * 0.3);
-    let spiral2 = sin(azimuth * 3.0 + rn * 3.0 - u.time * 0.15);
-    detail *= 0.90 + 0.10 * spiral1;
-    detail *= 0.95 + 0.05 * spiral2;
+    // Spiral density waves (subtle)
+    let spiral = sin(azimuth * 2.0 - rn * 4.0 + u.time * 0.2);
+    detail *= 0.96 + 0.04 * spiral;
 
-    // Fine turbulence (fbm noise)
-    let noise_uv = vec2<f32>(rn * 8.0, azimuth * 4.0 / PI);
+    // Smooth turbulence
+    let noise_uv = vec2<f32>(rn * 4.0, azimuth * 3.0 / PI);
     let turb = fbm(noise_uv);
-    detail *= 0.80 + 0.20 * turb;
+    detail *= 0.88 + 0.12 * turb;
 
-    // Hot spots near inner edge
-    let inner_turb = fbm(vec2<f32>(azimuth * 6.0 / PI + u.time * 0.2, rn * 20.0));
-    let inner_weight = exp(-(rn - u.disk_inner / rs) * 2.0);
-    detail += inner_turb * inner_weight * 0.3;
+    // Brighter flares near inner edge
+    let inner_turb = fbm(vec2<f32>(azimuth * 5.0 / PI + u.time * 0.15, rn * 10.0));
+    let inner_weight = exp(-max(rn - u.disk_inner / rs, 0.0) * 1.5);
+    detail += inner_turb * inner_weight * 0.2;
 
     return max(detail, 0.0);
 }
@@ -364,21 +361,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     let azimuth = atan2(cross_pos.z, cross_pos.x) + u.time * 0.5;
                     let col = disk_color(cross_r, azimuth, rs);
 
-                    // Edge opacity
-                    let inner_fade = smoothstep(u.disk_inner, u.disk_inner + 0.3 * rs, cross_r);
-                    let outer_fade = 1.0 - smoothstep(u.disk_outer - 2.0 * rs, u.disk_outer, cross_r);
-                    var opacity = inner_fade * outer_fade;
+                    // Soft outer edge only (inner edge handled by Novikov-Thorne luminosity)
+                    let outer_fade = 1.0 - smoothstep(u.disk_outer - 1.0 * rs, u.disk_outer, cross_r);
 
-                    // Higher-order images (photon ring) are thinner but we render them
-                    // at full brightness — they're actually amplified by lensing
-                    if disk_crossings > 0u {
-                        opacity = opacity * 0.8;
-                    }
-
-                    // Composite over previous crossings
+                    // Composite over previous crossings (photon ring from higher-order images)
                     let remaining = 1.0 - disk_opacity_accum;
-                    disk_color_accum = disk_color_accum + col * opacity * remaining;
-                    disk_opacity_accum = min(disk_opacity_accum + opacity * remaining, 1.0);
+                    disk_color_accum = disk_color_accum + col * outer_fade * remaining;
+                    disk_opacity_accum = min(disk_opacity_accum + outer_fade * remaining, 1.0);
                     disk_crossings = disk_crossings + 1u;
                 }
             }
@@ -419,10 +408,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     // ACES tonemapping for HDR → display
+    // (sRGB surface handles gamma — no manual pow needed)
     color = aces(color);
-
-    // Gamma correction (linear → sRGB)
-    color = pow(color, vec3<f32>(1.0 / 2.2));
 
     textureStore(output, pixel, vec4<f32>(color, 1.0));
 }
