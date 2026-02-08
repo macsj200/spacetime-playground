@@ -4,10 +4,10 @@ use winit::event::{ElementState, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::Window;
 
-use crate::metrics::schwarzschild::SchwarzschildParams;
 use crate::renderer::camera::OrbitalCamera;
 use crate::renderer::pipeline::RayMarchPipeline;
 use crate::renderer::uniforms::Uniforms;
+use crate::simulation::{Preset, Simulation};
 use crate::ui::{self, UiState};
 
 pub struct App {
@@ -17,7 +17,7 @@ pub struct App {
     config: wgpu::SurfaceConfiguration,
     pipeline: RayMarchPipeline,
     camera: OrbitalCamera,
-    params: SchwarzschildParams,
+    simulation: Simulation,
     ui_state: UiState,
     max_steps: u32,
     step_size: f32,
@@ -83,7 +83,6 @@ impl App {
         surface.configure(&device, &config);
 
         let pipeline = RayMarchPipeline::new(&device, surface_format, width, height);
-        // Start ~20° above the equatorial plane for a good view of the accretion disk
         let camera = OrbitalCamera::new(10.0, 0.5, 1.2);
 
         let egui_ctx = egui::Context::default();
@@ -104,10 +103,10 @@ impl App {
             config,
             pipeline,
             camera,
-            params: SchwarzschildParams::default(),
+            simulation: Simulation::new(Preset::Single),
             ui_state: UiState::default(),
-            max_steps: 500,
-            step_size: 0.01,
+            max_steps: 600,
+            step_size: 0.1,
             egui_ctx,
             egui_winit,
             egui_renderer,
@@ -129,7 +128,6 @@ impl App {
     }
 
     pub fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
-        // Let egui handle events first
         let egui_response = self.egui_winit.on_window_event(&self.window, event);
         if egui_response.consumed {
             return true;
@@ -154,7 +152,6 @@ impl App {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
-                    // Toggle UI with Tab
                     if key == KeyCode::Tab && event.state == ElementState::Pressed {
                         self.ui_state.show_ui = !self.ui_state.show_ui;
                     }
@@ -172,6 +169,13 @@ impl App {
         self.last_frame_time = now;
 
         self.camera.update(dt);
+
+        // Step simulation
+        self.simulation.step(dt);
+
+        // Upload body data
+        let gpu_bodies = self.simulation.gpu_bodies();
+        self.pipeline.update_bodies(&self.queue, &gpu_bodies);
 
         // Update uniforms
         let uniforms = Uniforms {
@@ -201,15 +205,13 @@ impl App {
             ],
             resolution: [self.config.width as f32, self.config.height as f32],
             fov: self.camera.fov,
-            rs: self.params.rs,
+            num_bodies: self.simulation.bodies.len() as u32,
             max_steps: self.max_steps,
             step_size: self.step_size,
             disk_enabled: if self.ui_state.disk_enabled { 1 } else { 0 },
-            disk_inner: self.ui_state.disk_inner,
-            disk_outer: self.ui_state.disk_outer,
             background_mode: self.ui_state.background_mode,
             time: self.start_time.elapsed().as_secs_f32(),
-            _padding: 0.0,
+            _padding: [0.0; 3],
         };
         self.pipeline.update_uniforms(&self.queue, &uniforms);
 
@@ -235,7 +237,7 @@ impl App {
             ui::draw_ui(
                 ctx,
                 &mut self.ui_state,
-                &mut self.params,
+                &mut self.simulation,
                 &mut self.camera,
                 &mut self.max_steps,
                 &mut self.step_size,
@@ -254,7 +256,6 @@ impl App {
             pixels_per_point: self.window.scale_factor() as f32,
         };
 
-        // Update egui textures
         for (id, delta) in &full_output.textures_delta.set {
             self.egui_renderer
                 .update_texture(&self.device, &self.queue, *id, delta);
@@ -269,23 +270,17 @@ impl App {
             &screen_descriptor,
         );
 
-        // Encode compute + blit commands
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Main Encoder"),
             });
 
-        // Dispatch compute shader
         self.pipeline.dispatch_compute(&mut encoder);
-
-        // Render fullscreen blit
         self.pipeline.render_fullscreen(&mut encoder, &view);
 
-        // Submit compute + blit
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        // Render egui on top
         let mut egui_encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -313,12 +308,18 @@ impl App {
         self.queue.submit(std::iter::once(egui_encoder.finish()));
         output.present();
 
-        // Free egui textures
         for id in &full_output.textures_delta.free {
             self.egui_renderer.free_texture(id);
         }
 
-        // Request redraw for continuous rendering
         self.window.request_redraw();
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Wait for all GPU work to finish before the surface is destroyed,
+        // avoiding the Vulkan "SurfaceSemaphores still in use" panic.
+        self.device.poll(wgpu::Maintain::Wait);
     }
 }

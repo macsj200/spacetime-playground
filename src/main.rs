@@ -1,6 +1,7 @@
 mod app;
 mod metrics;
 mod renderer;
+mod simulation;
 mod ui;
 
 use std::sync::Arc;
@@ -32,13 +33,17 @@ impl ApplicationHandler for SpacetimeApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Handle CloseRequested before borrowing self.app, so we can drop it
+        // while the window is still alive (avoids Vulkan surface semaphore panic).
+        if matches!(&event, WindowEvent::CloseRequested) {
+            self.app = None;
+            event_loop.exit();
+            return;
+        }
+
         let Some(app) = &mut self.app else { return };
 
         match &event {
-            WindowEvent::CloseRequested => {
-                event_loop.exit();
-                return;
-            }
             WindowEvent::RedrawRequested => {
                 app.render();
                 return;

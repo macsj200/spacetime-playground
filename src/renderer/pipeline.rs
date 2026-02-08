@@ -1,6 +1,7 @@
 use wgpu::util::DeviceExt;
 
 use super::uniforms::Uniforms;
+use crate::simulation::{GpuBody, MAX_BODIES};
 
 pub struct RayMarchPipeline {
     pub compute_pipeline: wgpu::ComputePipeline,
@@ -8,6 +9,7 @@ pub struct RayMarchPipeline {
     pub compute_bind_group: wgpu::BindGroup,
     pub render_bind_group: wgpu::BindGroup,
     pub uniform_buffer: wgpu::Buffer,
+    pub body_buffer: wgpu::Buffer,
     _output_texture: wgpu::Texture,
     pub texture_size: (u32, u32),
 }
@@ -28,6 +30,13 @@ impl RayMarchPipeline {
             label: Some("Uniform Buffer"),
             contents: bytemuck::cast_slice(&[uniforms]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let body_data = [GpuBody::default(); MAX_BODIES];
+        let body_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Body Buffer"),
+            contents: bytemuck::cast_slice(&body_data),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -81,6 +90,17 @@ impl RayMarchPipeline {
                         },
                         count: None,
                     },
+                    // Body storage buffer (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -95,6 +115,10 @@ impl RayMarchPipeline {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: body_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -210,6 +234,7 @@ impl RayMarchPipeline {
             compute_bind_group,
             render_bind_group,
             uniform_buffer,
+            body_buffer,
             _output_texture: output_texture,
             texture_size: (width, height),
         }
@@ -227,6 +252,10 @@ impl RayMarchPipeline {
 
     pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &Uniforms) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[*uniforms]));
+    }
+
+    pub fn update_bodies(&self, queue: &wgpu::Queue, bodies: &[GpuBody; MAX_BODIES]) {
+        queue.write_buffer(&self.body_buffer, 0, bytemuck::cast_slice(bodies));
     }
 
     pub fn dispatch_compute(&self, encoder: &mut wgpu::CommandEncoder) {
