@@ -106,7 +106,7 @@ impl App {
             camera,
             params: SchwarzschildParams::default(),
             ui_state: UiState::default(),
-            max_steps: 300,
+            max_steps: 500,
             step_size: 0.01,
             egui_ctx,
             egui_winit,

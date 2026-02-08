@@ -295,10 +295,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var captured = false;
     var escaped = false;
 
-    // Disk: accumulate color from multiple equatorial crossings
+    // Disk: first equatorial crossing only (avoids secondary image artifacts)
     var disk_color_accum = vec3<f32>(0.0);
-    var disk_opacity_accum = 0.0;
-    var disk_crossings = 0u;
+    var disk_hit = false;
 
     let initial_angle = atan2(sin_angle, -cos_angle);
     var prev_y = cam_pos.y;
@@ -349,13 +348,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let pos_3d = r_now * (cos(phi_total) * r_hat + sin(phi_total) * tangent);
             let cur_y = pos_3d.y;
 
-            if prev_y * cur_y < 0.0 {
-                // Interpolate exact crossing point
+            if prev_y * cur_y < 0.0 && !disk_hit {
+                // First equatorial crossing — interpolate exact crossing point
                 let t_cross = abs(prev_y) / (abs(prev_y) + abs(cur_y));
                 let cross_phi = phi_before + t_cross * dphi;
                 let cross_u = u_before + t_cross * (u_val - u_before);
                 let cross_r = 1.0 / max(cross_u, 1e-8);
                 let cross_pos = cross_r * (cos(cross_phi) * r_hat + sin(cross_phi) * tangent);
+
+                // Mark that we've crossed the plane (stop checking further crossings)
+                disk_hit = true;
 
                 if cross_r > u.disk_inner && cross_r < u.disk_outer {
                     let azimuth = atan2(cross_pos.z, cross_pos.x) + u.time * 0.5;
@@ -363,12 +365,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
                     // Soft outer edge only (inner edge handled by Novikov-Thorne luminosity)
                     let outer_fade = 1.0 - smoothstep(u.disk_outer - 1.0 * rs, u.disk_outer, cross_r);
-
-                    // Composite over previous crossings (photon ring from higher-order images)
-                    let remaining = 1.0 - disk_opacity_accum;
-                    disk_color_accum = disk_color_accum + col * outer_fade * remaining;
-                    disk_opacity_accum = min(disk_opacity_accum + outer_fade * remaining, 1.0);
-                    disk_crossings = disk_crossings + 1u;
+                    disk_color_accum = col * outer_fade;
                 }
             }
             prev_y = cur_y;
@@ -387,13 +384,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var color = vec3<f32>(0.0);
 
-    if disk_crossings > 0u {
+    if disk_hit && (disk_color_accum.x > 0.0 || disk_color_accum.y > 0.0 || disk_color_accum.z > 0.0) {
         if escaped {
             let exit_phi = initial_angle + phi_total;
             let exit_dir = cos(exit_phi) * (-r_hat) + sin(exit_phi) * tangent;
             let angles = dir_to_spherical(exit_dir);
             let bg = background(angles.x, angles.y);
-            color = mix(bg, disk_color_accum, disk_opacity_accum);
+            // Blend disk over background based on disk brightness
+            let disk_lum = max(disk_color_accum.x, max(disk_color_accum.y, disk_color_accum.z));
+            let opacity = clamp(disk_lum, 0.0, 1.0);
+            color = mix(bg, disk_color_accum, opacity);
         } else {
             color = disk_color_accum;
         }
