@@ -1,12 +1,11 @@
-use crate::metrics::schwarzschild::SchwarzschildParams;
 use crate::renderer::camera::OrbitalCamera;
+use crate::simulation::{Preset, Simulation};
 
 pub struct UiState {
     pub show_ui: bool,
-    pub background_mode: u32, // 0 = checkerboard, 1 = star field
+    pub background_mode: u32,
     pub disk_enabled: bool,
-    pub disk_inner: f32,
-    pub disk_outer: f32,
+    pub selected_body: usize,
 }
 
 impl Default for UiState {
@@ -15,8 +14,7 @@ impl Default for UiState {
             show_ui: true,
             background_mode: 1,
             disk_enabled: true,
-            disk_inner: 3.0,
-            disk_outer: 15.0,
+            selected_body: 0,
         }
     }
 }
@@ -24,7 +22,7 @@ impl Default for UiState {
 pub fn draw_ui(
     ctx: &egui::Context,
     ui_state: &mut UiState,
-    params: &mut SchwarzschildParams,
+    simulation: &mut Simulation,
     camera: &mut OrbitalCamera,
     max_steps: &mut u32,
     step_size: &mut f32,
@@ -36,23 +34,104 @@ pub fn draw_ui(
     egui::Window::new("Black Hole Parameters")
         .default_pos([10.0, 10.0])
         .show(ctx, |ui| {
-            ui.heading("Metric");
-            ui.add(
-                egui::Slider::new(&mut params.rs, 0.1..=5.0)
-                    .text("Schwarzschild radius (rs)"),
-            );
-            ui.label(format!(
-                "Photon sphere: r = {:.2}",
-                params.photon_sphere_radius()
-            ));
-            ui.label(format!(
-                "Critical impact param: b = {:.2}",
-                params.critical_impact_parameter()
-            ));
-            ui.label(format!(
-                "ISCO: r = {:.2}",
-                params.isco_radius()
-            ));
+            // Preset selector
+            ui.heading("Preset");
+            ui.horizontal(|ui| {
+                for preset in Preset::ALL {
+                    if ui
+                        .selectable_label(simulation.preset == preset, preset.name())
+                        .clicked()
+                    {
+                        simulation.load_preset(preset);
+                        ui_state.selected_body = 0;
+                    }
+                }
+            });
+
+            ui.separator();
+
+            // Time controls
+            ui.heading("Simulation");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut simulation.paused, "Paused");
+                ui.add(
+                    egui::Slider::new(&mut simulation.speed, 0.1..=5.0)
+                        .text("Speed")
+                        .logarithmic(true),
+                );
+            });
+            ui.label(format!("Time: {:.1}s", simulation.time));
+
+            ui.separator();
+
+            // Bodies list
+            ui.heading("Bodies");
+            let num_bodies = simulation.bodies.len();
+            for i in 0..num_bodies {
+                let label = format!(
+                    "Body {} (rs={:.2})",
+                    i, simulation.bodies[i].rs
+                );
+                if ui
+                    .selectable_label(ui_state.selected_body == i, label)
+                    .clicked()
+                {
+                    ui_state.selected_body = i;
+                }
+            }
+
+            // Clamp selected body to valid range
+            if ui_state.selected_body >= num_bodies {
+                ui_state.selected_body = 0;
+            }
+
+            ui.separator();
+
+            // Selected body details
+            if num_bodies > 0 {
+                let idx = ui_state.selected_body;
+                ui.heading(format!("Body {}", idx));
+
+                ui.add(
+                    egui::Slider::new(&mut simulation.bodies[idx].rs, 0.1..=5.0)
+                        .text("Schwarzschild radius (rs)"),
+                );
+
+                let rs = simulation.bodies[idx].rs;
+                ui.label(format!("Photon sphere: r = {:.2}", 1.5 * rs));
+                ui.label(format!(
+                    "Critical impact param: b = {:.2}",
+                    3.0 * 3.0_f32.sqrt() / 2.0 * rs
+                ));
+                ui.label(format!("ISCO: r = {:.2}", 3.0 * rs));
+
+                ui.label(format!(
+                    "Position: ({:.2}, {:.2}, {:.2})",
+                    simulation.bodies[idx].position.x,
+                    simulation.bodies[idx].position.y,
+                    simulation.bodies[idx].position.z,
+                ));
+
+                ui.separator();
+                ui.heading("Accretion Disk");
+                ui.checkbox(&mut ui_state.disk_enabled, "Enable accretion disk");
+                if ui_state.disk_enabled {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut simulation.bodies[idx].disk_inner_mult,
+                            1.5..=10.0,
+                        )
+                        .text("Inner radius (×rs)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut simulation.bodies[idx].disk_outer_mult,
+                            5.0..=30.0,
+                        )
+                        .text("Outer radius (×rs)"),
+                    );
+                }
+            }
 
             ui.separator();
             ui.heading("Camera");
@@ -67,29 +146,14 @@ pub fn draw_ui(
             );
 
             ui.separator();
-            ui.heading("Accretion Disk");
-            ui.checkbox(&mut ui_state.disk_enabled, "Enable accretion disk");
-            if ui_state.disk_enabled {
-                // Snap inner radius to ISCO by default
-                ui.add(
-                    egui::Slider::new(&mut ui_state.disk_inner, 1.5..=10.0)
-                        .text("Inner radius"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.disk_outer, 5.0..=30.0)
-                        .text("Outer radius"),
-                );
-            }
-
-            ui.separator();
             ui.heading("Integration");
             ui.add(
-                egui::Slider::new(max_steps, 50..=1000)
+                egui::Slider::new(max_steps, 50..=2000)
                     .text("Max RK4 steps"),
             );
             ui.add(
-                egui::Slider::new(step_size, 0.001..=0.1)
-                    .text("Step size (dφ)")
+                egui::Slider::new(step_size, 0.01..=1.0)
+                    .text("Step size (dt)")
                     .logarithmic(true),
             );
 

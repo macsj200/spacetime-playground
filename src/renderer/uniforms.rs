@@ -9,15 +9,13 @@ pub struct Uniforms {
     pub camera_right: [f32; 4],
     pub resolution: [f32; 2],
     pub fov: f32,
-    pub rs: f32,
+    pub num_bodies: u32,
     pub max_steps: u32,
     pub step_size: f32,
     pub disk_enabled: u32,
-    pub disk_inner: f32,
-    pub disk_outer: f32,
     pub background_mode: u32,
     pub time: f32,
-    pub _padding: f32,
+    pub _padding: [f32; 3],
 }
 
 impl Default for Uniforms {
@@ -29,15 +27,13 @@ impl Default for Uniforms {
             camera_right: [1.0, 0.0, 0.0, 0.0],
             resolution: [800.0, 600.0],
             fov: 1.0,
-            rs: 1.0,
-            max_steps: 300,
-            step_size: 0.01,
+            num_bodies: 1,
+            max_steps: 600,
+            step_size: 0.1,
             disk_enabled: 1,
-            disk_inner: 3.0,
-            disk_outer: 15.0,
             background_mode: 0,
             time: 0.0,
-            _padding: 0.0,
+            _padding: [0.0; 3],
         }
     }
 }
