@@ -1,6 +1,7 @@
 mod app;
 mod metrics;
 mod renderer;
+mod screenshot;
 mod simulation;
 mod ui;
 
@@ -57,6 +58,11 @@ impl ApplicationHandler for SpacetimeApp {
 
 fn main() {
     env_logger::init();
+
+    if let Some(config) = screenshot::parse_args() {
+        screenshot::render_screenshot(&config);
+        return;
+    }
 
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);

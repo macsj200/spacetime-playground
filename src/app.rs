@@ -155,6 +155,9 @@ impl App {
                     if key == KeyCode::Tab && event.state == ElementState::Pressed {
                         self.ui_state.show_ui = !self.ui_state.show_ui;
                     }
+                    if key == KeyCode::F12 && event.state == ElementState::Pressed {
+                        self.ui_state.screenshot_requested = true;
+                    }
                     self.camera.handle_key(key, event.state);
                 }
                 true
@@ -280,6 +283,11 @@ impl App {
         self.pipeline.render_fullscreen(&mut encoder, &view);
 
         self.queue.submit(std::iter::once(encoder.finish()));
+
+        if self.ui_state.screenshot_requested {
+            self.ui_state.screenshot_requested = false;
+            self.pipeline.capture_screenshot(&self.device, &self.queue);
+        }
 
         let mut egui_encoder = self
             .device

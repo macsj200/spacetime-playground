@@ -6,6 +6,7 @@ pub struct UiState {
     pub background_mode: u32,
     pub disk_enabled: bool,
     pub selected_body: usize,
+    pub screenshot_requested: bool,
 }
 
 impl Default for UiState {
@@ -15,6 +16,7 @@ impl Default for UiState {
             background_mode: 1,
             disk_enabled: true,
             selected_body: 0,
+            screenshot_requested: false,
         }
     }
 }
@@ -164,5 +166,8 @@ pub fn draw_ui(
                 ui.selectable_value(&mut ui_state.background_mode, 0, "Checkerboard");
                 ui.selectable_value(&mut ui_state.background_mode, 1, "Star field");
             });
+            if ui.button("Screenshot (F12)").clicked() {
+                ui_state.screenshot_requested = true;
+            }
         });
 }

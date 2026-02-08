@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use wgpu::util::DeviceExt;
 
 use super::uniforms::Uniforms;
@@ -50,7 +52,7 @@ impl RayMarchPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
 
@@ -290,5 +292,112 @@ impl RayMarchPipeline {
         pass.set_pipeline(&self.render_pipeline);
         pass.set_bind_group(0, &self.render_bind_group, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    pub fn capture_screenshot(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<PathBuf> {
+        let dir = PathBuf::from("screenshots");
+        std::fs::create_dir_all(&dir).ok()?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let path = dir.join(format!("screenshot_{}.png", timestamp));
+        self.capture_screenshot_to(device, queue, &path)
+    }
+
+    pub fn capture_screenshot_to(&self, device: &wgpu::Device, queue: &wgpu::Queue, path: &std::path::Path) -> Option<PathBuf> {
+        let (width, height) = self.texture_size;
+        let bytes_per_pixel: u32 = 8; // Rgba16Float = 4 channels × 2 bytes
+        let unpadded_bytes_per_row = width * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
+
+        let buffer_size = (padded_bytes_per_row * height) as u64;
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Screenshot Staging Buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Screenshot Encoder"),
+        });
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self._output_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        device.poll(wgpu::Maintain::Wait);
+
+        if receiver.recv().ok()?.is_err() {
+            log::error!("Failed to map screenshot buffer");
+            return None;
+        }
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Convert f16 RGBA to u8 RGBA
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for row in 0..height {
+            let row_start = (row * padded_bytes_per_row) as usize;
+            let row_end = row_start + (width * bytes_per_pixel) as usize;
+            let row_data = &data[row_start..row_end];
+            for pixel in row_data.chunks_exact(8) {
+                let r = half::f16::from_le_bytes([pixel[0], pixel[1]]).to_f32();
+                let g = half::f16::from_le_bytes([pixel[2], pixel[3]]).to_f32();
+                let b = half::f16::from_le_bytes([pixel[4], pixel[5]]).to_f32();
+                let a = half::f16::from_le_bytes([pixel[6], pixel[7]]).to_f32();
+                pixels.push((r.clamp(0.0, 1.0) * 255.0) as u8);
+                pixels.push((g.clamp(0.0, 1.0) * 255.0) as u8);
+                pixels.push((b.clamp(0.0, 1.0) * 255.0) as u8);
+                pixels.push((a.clamp(0.0, 1.0) * 255.0) as u8);
+            }
+        }
+
+        drop(data);
+        staging_buffer.unmap();
+
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).ok();
+            }
+        }
+
+        match image::save_buffer(path, &pixels, width, height, image::ColorType::Rgba8) {
+            Ok(()) => {
+                log::info!("Screenshot saved to {}", path.display());
+                Some(path.to_path_buf())
+            }
+            Err(e) => {
+                log::error!("Failed to save screenshot: {}", e);
+                None
+            }
+        }
     }
 }
