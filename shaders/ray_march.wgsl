@@ -140,8 +140,8 @@ fn background(theta: f32, phi: f32) -> vec3<f32> {
 // Cartesian 3D grid: lines at x,y,z = n*spacing. Returns line strength (0..1) at a world-space position.
 // The grid lives in flat space; we sample it along the curved ray path so it appears distorted.
 fn grid_strength_at_pos(P: vec3<f32>) -> f32 {
-    let spacing = 4.0;
-    let line_width = 0.08;
+    let spacing = 12.0;
+    let line_width = 0.12;
 
     let to_line_x = spacing * length(vec2<f32>(fract(P.y / spacing + 0.5) - 0.5, fract(P.z / spacing + 0.5) - 0.5));
     let to_line_y = spacing * length(vec2<f32>(fract(P.x / spacing + 0.5) - 0.5, fract(P.z / spacing + 0.5) - 0.5));
