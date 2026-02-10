@@ -137,31 +137,21 @@ fn background(theta: f32, phi: f32) -> vec3<f32> {
     return checkerboard(theta, phi);
 }
 
-fn grid_pattern(dir: vec3<f32>) -> vec3<f32> {
-    let r = length(dir);
-    let theta = acos(clamp(dir.y / r, -1.0, 1.0));
-    let phi = atan2(dir.z, dir.x) + PI;
+// Cartesian 3D grid: lines at x,y,z = n*spacing. Returns line strength (0..1) at a world-space position.
+// The grid lives in flat space; we sample it along the curved ray path so it appears distorted.
+fn grid_strength_at_pos(P: vec3<f32>) -> f32 {
+    let spacing = 4.0;
+    let line_width = 0.08;
 
-    // Grid spacing: 10-degree intervals
-    let lat_spacing = PI / 18.0;  // 10 degrees
-    let lon_spacing = PI / 18.0;  // 10 degrees
+    let to_line_x = spacing * length(vec2<f32>(fract(P.y / spacing + 0.5) - 0.5, fract(P.z / spacing + 0.5) - 0.5));
+    let to_line_y = spacing * length(vec2<f32>(fract(P.x / spacing + 0.5) - 0.5, fract(P.z / spacing + 0.5) - 0.5));
+    let to_line_z = spacing * length(vec2<f32>(fract(P.x / spacing + 0.5) - 0.5, fract(P.y / spacing + 0.5) - 0.5));
 
-    // Distance to nearest gridline in each coordinate
-    let lat_frac = abs(fract(theta / lat_spacing + 0.5) - 0.5) * lat_spacing;
-    let lon_frac = abs(fract(phi / lon_spacing + 0.5) - 0.5) * lon_spacing;
+    let line_x = 1.0 - smoothstep(0.0, line_width, to_line_x);
+    let line_y = 1.0 - smoothstep(0.0, line_width, to_line_y);
+    let line_z = 1.0 - smoothstep(0.0, line_width, to_line_z);
 
-    // Anti-aliased lines using smoothstep; line width in radians
-    let line_width = 0.008;
-    let lat_line = 1.0 - smoothstep(0.0, line_width, lat_frac);
-    let lon_line = 1.0 - smoothstep(0.0, line_width, lon_frac);
-
-    let line = max(lat_line, lon_line);
-
-    // Dark background with bright cyan gridlines
-    let bg = vec3<f32>(0.01, 0.01, 0.02);
-    let line_color = vec3<f32>(0.1, 0.6, 0.8);
-
-    return mix(bg, line_color, line);
+    return min(line_x + line_y + line_z, 1.0);
 }
 
 fn dir_to_spherical(dir: vec3<f32>) -> vec2<f32> {
@@ -367,6 +357,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var disk_hit = false;
     var prev_y = pos.y;
 
+    // Grid volume state: composite grid lines along the curved ray path
+    var grid_accum_color = vec3<f32>(0.0);
+    var grid_accum_alpha = 0.0;
+    let grid_line_color = vec3<f32>(0.1, 0.6, 0.8);
+    let grid_step_alpha = 0.12;
+
     // RK4 integration in 3D
     for (var i = 0u; i < u.max_steps; i = i + 1u) {
         // Check capture
@@ -379,6 +375,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         if check_escape(pos) {
             escaped = true;
             break;
+        }
+
+        // Sample Cartesian grid at current position (grid lives in flat space, ray is bent)
+        if u.grid_enabled == 1u {
+            let strength = grid_strength_at_pos(pos);
+            let line_alpha = strength * grid_step_alpha;
+            grid_accum_color += (1.0 - grid_accum_alpha) * line_alpha * grid_line_color;
+            grid_accum_alpha += (1.0 - grid_accum_alpha) * line_alpha;
         }
 
         // Store pre-step y for disk crossing detection
@@ -469,16 +473,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if has_disk {
         if escaped {
             let exit_dir = normalize(vel);
-            var bg: vec3<f32>;
-            if u.grid_enabled == 1u {
-                bg = grid_pattern(exit_dir);
-            } else {
-                let angles = dir_to_spherical(exit_dir);
-                bg = background(angles.x, angles.y);
-            }
+            let angles = dir_to_spherical(exit_dir);
+            let bg = background(angles.x, angles.y);
             let disk_lum = max(disk_color_accum.x, max(disk_color_accum.y, disk_color_accum.z));
             let opacity = clamp(disk_lum, 0.0, 1.0);
-            color = mix(bg, disk_color_accum, opacity);
+            let behind = mix(bg, disk_color_accum, opacity);
+            if u.grid_enabled == 1u {
+                color = grid_accum_color + (1.0 - grid_accum_alpha) * behind;
+            } else {
+                color = behind;
+            }
         } else {
             color = disk_color_accum;
         }
@@ -486,11 +490,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         color = vec3<f32>(0.0);
     } else {
         let exit_dir = normalize(vel);
+        let angles = dir_to_spherical(exit_dir);
+        let bg = background(angles.x, angles.y);
         if u.grid_enabled == 1u {
-            color = grid_pattern(exit_dir);
+            color = grid_accum_color + (1.0 - grid_accum_alpha) * bg;
         } else {
-            let angles = dir_to_spherical(exit_dir);
-            color = background(angles.x, angles.y);
+            color = bg;
         }
     }
 
