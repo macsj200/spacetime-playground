@@ -187,7 +187,8 @@ pub fn render_screenshot(config: &ScreenshotConfig) {
         disk_enabled: 1,
         background_mode: config.background_mode,
         time: config.sim_time,
-        _padding: [0.0; 3],
+        grid_enabled: 0,
+        _padding: [0.0; 2],
     };
     pipeline.update_uniforms(&queue, &uniforms);
 

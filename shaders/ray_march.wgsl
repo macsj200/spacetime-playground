@@ -11,9 +11,9 @@ struct Uniforms {
     disk_enabled: u32,
     background_mode: u32,
     time: f32,
+    grid_enabled: u32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 };
 
 struct Body {
@@ -135,6 +135,33 @@ fn background(theta: f32, phi: f32) -> vec3<f32> {
         return starfield(theta, phi);
     }
     return checkerboard(theta, phi);
+}
+
+fn grid_pattern(dir: vec3<f32>) -> vec3<f32> {
+    let r = length(dir);
+    let theta = acos(clamp(dir.y / r, -1.0, 1.0));
+    let phi = atan2(dir.z, dir.x) + PI;
+
+    // Grid spacing: 10-degree intervals
+    let lat_spacing = PI / 18.0;  // 10 degrees
+    let lon_spacing = PI / 18.0;  // 10 degrees
+
+    // Distance to nearest gridline in each coordinate
+    let lat_frac = abs(fract(theta / lat_spacing + 0.5) - 0.5) * lat_spacing;
+    let lon_frac = abs(fract(phi / lon_spacing + 0.5) - 0.5) * lon_spacing;
+
+    // Anti-aliased lines using smoothstep; line width in radians
+    let line_width = 0.008;
+    let lat_line = 1.0 - smoothstep(0.0, line_width, lat_frac);
+    let lon_line = 1.0 - smoothstep(0.0, line_width, lon_frac);
+
+    let line = max(lat_line, lon_line);
+
+    // Dark background with bright cyan gridlines
+    let bg = vec3<f32>(0.01, 0.01, 0.02);
+    let line_color = vec3<f32>(0.1, 0.6, 0.8);
+
+    return mix(bg, line_color, line);
 }
 
 fn dir_to_spherical(dir: vec3<f32>) -> vec2<f32> {
@@ -442,8 +469,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if has_disk {
         if escaped {
             let exit_dir = normalize(vel);
-            let angles = dir_to_spherical(exit_dir);
-            let bg = background(angles.x, angles.y);
+            var bg: vec3<f32>;
+            if u.grid_enabled == 1u {
+                bg = grid_pattern(exit_dir);
+            } else {
+                let angles = dir_to_spherical(exit_dir);
+                bg = background(angles.x, angles.y);
+            }
             let disk_lum = max(disk_color_accum.x, max(disk_color_accum.y, disk_color_accum.z));
             let opacity = clamp(disk_lum, 0.0, 1.0);
             color = mix(bg, disk_color_accum, opacity);
@@ -454,8 +486,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         color = vec3<f32>(0.0);
     } else {
         let exit_dir = normalize(vel);
-        let angles = dir_to_spherical(exit_dir);
-        color = background(angles.x, angles.y);
+        if u.grid_enabled == 1u {
+            color = grid_pattern(exit_dir);
+        } else {
+            let angles = dir_to_spherical(exit_dir);
+            color = background(angles.x, angles.y);
+        }
     }
 
     // ACES tonemapping

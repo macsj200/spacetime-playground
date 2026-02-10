@@ -15,7 +15,8 @@ pub struct Uniforms {
     pub disk_enabled: u32,
     pub background_mode: u32,
     pub time: f32,
-    pub _padding: [f32; 3],
+    pub grid_enabled: u32,
+    pub _padding: [f32; 2],
 }
 
 impl Default for Uniforms {
@@ -33,7 +34,8 @@ impl Default for Uniforms {
             disk_enabled: 1,
             background_mode: 0,
             time: 0.0,
-            _padding: [0.0; 3],
+            grid_enabled: 0,
+            _padding: [0.0; 2],
         }
     }
 }
