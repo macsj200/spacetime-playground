@@ -105,7 +105,7 @@ impl App {
             camera,
             simulation: Simulation::new(Preset::Single),
             ui_state: UiState::default(),
-            max_steps: 600,
+            max_steps: 200,
             step_size: 0.1,
             egui_ctx,
             egui_winit,
@@ -315,6 +315,11 @@ impl App {
 
         self.queue.submit(std::iter::once(egui_encoder.finish()));
         output.present();
+
+        // Poll device to let Metal release completed command buffer resources.
+        // Without this, command buffers accumulate faster than they're retired,
+        // causing unbounded virtual memory growth on macOS.
+        self.device.poll(wgpu::Maintain::Poll);
 
         for id in &full_output.textures_delta.free {
             self.egui_renderer.free_texture(id);

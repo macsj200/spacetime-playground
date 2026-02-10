@@ -30,7 +30,7 @@ struct Body {
 
 const PI: f32 = 3.14159265358979;
 const MAX_BODIES: u32 = 8u;
-const ESCAPE_RADIUS: f32 = 50.0;
+const ESCAPE_RADIUS: f32 = 30.0;
 
 // ── Hash / noise ──────────────────────────────────────────────────────
 
@@ -282,11 +282,14 @@ fn check_capture(pos: vec3<f32>) -> i32 {
     return -1i;
 }
 
-fn check_escape(pos: vec3<f32>) -> bool {
+fn check_escape(pos: vec3<f32>, vel: vec3<f32>) -> bool {
+    // Escape when heading away from all bodies and far enough that
+    // gravitational deflection is negligible (matches old 1D shader logic).
     for (var i = 0u; i < u.num_bodies; i = i + 1u) {
-        let body_pos = bodies[i].position.xyz;
-        let r = length(pos - body_pos);
-        if r < ESCAPE_RADIUS {
+        let delta = pos - bodies[i].position.xyz;
+        let r = length(delta);
+        // Must be far enough AND heading away from this body
+        if r < ESCAPE_RADIUS && dot(vel, delta) < 0.0 {
             return false;
         }
     }
@@ -331,7 +334,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var pos = u.camera_pos.xyz;
     var vel = ray_dir; // normalized direction (null geodesic, speed = 1)
 
-    let dt = u.step_size;
+    let base_dt = u.step_size;
     var captured = false;
     var escaped = false;
 
@@ -349,10 +352,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
 
         // Check escape
-        if check_escape(pos) {
+        if check_escape(pos, vel) {
             escaped = true;
             break;
         }
+
+        // Adaptive step size: small near bodies, large in open space
+        var min_r_over_rs = 1e6;
+        for (var b = 0u; b < u.num_bodies; b = b + 1u) {
+            let r = length(pos - bodies[b].position.xyz);
+            let ratio = r / max(bodies[b].rs, 0.001);
+            min_r_over_rs = min(min_r_over_rs, ratio);
+        }
+        // Scale: 1x at r=rs, ramps up to 10x far from all bodies
+        let dt = base_dt * clamp(min_r_over_rs * 0.2, 1.0, 10.0);
 
         // Store pre-step y for disk crossing detection
         let y_before = pos.y;

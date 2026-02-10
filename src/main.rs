@@ -24,7 +24,8 @@ impl ApplicationHandler for SpacetimeApp {
                 .with_inner_size(winit::dpi::LogicalSize::new(1280, 720));
 
             let window = Arc::new(event_loop.create_window(attrs).unwrap());
-            self.app = Some(app::App::new(window));
+            self.app = Some(app::App::new(window.clone()));
+            window.request_redraw();
         }
     }
 
