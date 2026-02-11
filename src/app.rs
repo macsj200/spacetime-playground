@@ -216,7 +216,8 @@ impl App {
             disk_enabled: if self.ui_state.disk_enabled { 1 } else { 0 },
             background_mode: self.ui_state.background_mode,
             time: self.start_time.elapsed().as_secs_f32(),
-            _padding: [0.0; 3],
+            grid_enabled: if self.ui_state.grid_enabled { 1 } else { 0 },
+            _padding: [0.0; 2],
         };
         self.pipeline.update_uniforms(&self.queue, &uniforms);
 

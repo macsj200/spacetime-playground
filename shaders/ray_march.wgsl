@@ -11,9 +11,9 @@ struct Uniforms {
     disk_enabled: u32,
     background_mode: u32,
     time: f32,
+    grid_enabled: u32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 };
 
 struct Body {
@@ -135,6 +135,23 @@ fn background(theta: f32, phi: f32) -> vec3<f32> {
         return starfield(theta, phi);
     }
     return checkerboard(theta, phi);
+}
+
+// Cartesian 3D grid: lines at x,y,z = n*spacing. Returns line strength (0..1) at a world-space position.
+// The grid lives in flat space; we sample it along the curved ray path so it appears distorted.
+fn grid_strength_at_pos(P: vec3<f32>) -> f32 {
+    let spacing = 12.0;
+    let line_width = 0.12;
+
+    let to_line_x = spacing * length(vec2<f32>(fract(P.y / spacing + 0.5) - 0.5, fract(P.z / spacing + 0.5) - 0.5));
+    let to_line_y = spacing * length(vec2<f32>(fract(P.x / spacing + 0.5) - 0.5, fract(P.z / spacing + 0.5) - 0.5));
+    let to_line_z = spacing * length(vec2<f32>(fract(P.x / spacing + 0.5) - 0.5, fract(P.y / spacing + 0.5) - 0.5));
+
+    let line_x = 1.0 - smoothstep(0.0, line_width, to_line_x);
+    let line_y = 1.0 - smoothstep(0.0, line_width, to_line_y);
+    let line_z = 1.0 - smoothstep(0.0, line_width, to_line_z);
+
+    return min(line_x + line_y + line_z, 1.0);
 }
 
 fn dir_to_spherical(dir: vec3<f32>) -> vec2<f32> {
@@ -340,6 +357,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var disk_hit = false;
     var prev_y = pos.y;
 
+    // Grid volume state: composite grid lines along the curved ray path
+    var grid_accum_color = vec3<f32>(0.0);
+    var grid_accum_alpha = 0.0;
+    let grid_line_color = vec3<f32>(0.1, 0.6, 0.8);
+    let grid_step_alpha = 0.12;
+
     // RK4 integration in 3D
     for (var i = 0u; i < u.max_steps; i = i + 1u) {
         // Check capture
@@ -352,6 +375,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         if check_escape(pos) {
             escaped = true;
             break;
+        }
+
+        // Sample Cartesian grid at current position (grid lives in flat space, ray is bent)
+        if u.grid_enabled == 1u {
+            let strength = grid_strength_at_pos(pos);
+            let line_alpha = strength * grid_step_alpha;
+            grid_accum_color += (1.0 - grid_accum_alpha) * line_alpha * grid_line_color;
+            grid_accum_alpha += (1.0 - grid_accum_alpha) * line_alpha;
         }
 
         // Store pre-step y for disk crossing detection
@@ -446,7 +477,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let bg = background(angles.x, angles.y);
             let disk_lum = max(disk_color_accum.x, max(disk_color_accum.y, disk_color_accum.z));
             let opacity = clamp(disk_lum, 0.0, 1.0);
-            color = mix(bg, disk_color_accum, opacity);
+            let behind = mix(bg, disk_color_accum, opacity);
+            if u.grid_enabled == 1u {
+                color = grid_accum_color + (1.0 - grid_accum_alpha) * behind;
+            } else {
+                color = behind;
+            }
         } else {
             color = disk_color_accum;
         }
@@ -455,7 +491,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     } else {
         let exit_dir = normalize(vel);
         let angles = dir_to_spherical(exit_dir);
-        color = background(angles.x, angles.y);
+        let bg = background(angles.x, angles.y);
+        if u.grid_enabled == 1u {
+            color = grid_accum_color + (1.0 - grid_accum_alpha) * bg;
+        } else {
+            color = bg;
+        }
     }
 
     // ACES tonemapping
