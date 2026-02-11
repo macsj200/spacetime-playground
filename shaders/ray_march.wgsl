@@ -314,14 +314,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Debug: just draw a checkerboard (no ray march, no bodies). Use _pad0 > 0.5 to enable.
-    if u._pad0 > 0.5 {
-        let check = (pixel.x / 32 + pixel.y / 32) % 2;
-        let c = select(0.2, 0.9, check == 0);
-        textureStore(output, pixel, vec4<f32>(c, c, c, 1.0));
-        return;
-    }
-
     let ndc = vec2<f32>(
         (f32(pixel.x) + 0.5 - f32(dims.x) * 0.5) / (f32(dims.x) * 0.5),
         -(f32(pixel.y) + 0.5 - f32(dims.y) * 0.5) / (f32(dims.y) * 0.5),

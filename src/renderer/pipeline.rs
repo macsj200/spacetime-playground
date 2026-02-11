@@ -92,16 +92,14 @@ impl RayMarchPipeline {
                         },
                         count: None,
                     },
-                    // Body storage buffer (read-only). min_binding_size required on Metal.
+                    // Body storage buffer (read-only)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
-                            min_binding_size: std::num::NonZeroU64::new(
-                                (std::mem::size_of::<GpuBody>() * MAX_BODIES) as u64,
-                            ),
+                            min_binding_size: None,
                         },
                         count: None,
                     },

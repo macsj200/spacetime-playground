@@ -7,8 +7,6 @@ pub struct UiState {
     pub disk_enabled: bool,
     pub selected_body: usize,
     pub screenshot_requested: bool,
-    /// When true, shader only draws a checkerboard (no ray march, no bodies). For debugging freeze/input.
-    pub debug_checkerboard: bool,
 }
 
 impl Default for UiState {
@@ -16,10 +14,9 @@ impl Default for UiState {
         Self {
             show_ui: true,
             background_mode: 1,
-            disk_enabled: false,
+            disk_enabled: true,
             selected_body: 0,
             screenshot_requested: false,
-            debug_checkerboard: false,
         }
     }
 }
@@ -39,16 +36,6 @@ pub fn draw_ui(
     egui::Window::new("Black Hole Parameters")
         .default_pos([10.0, 10.0])
         .show(ctx, |ui| {
-            ui.checkbox(
-                &mut ui_state.debug_checkerboard,
-                "Debug: checkerboard only (no ray march, no bodies)",
-            );
-            if ui_state.debug_checkerboard {
-                ui.label("Renders only a checkerboard to debug freeze/input.");
-            }
-
-            ui.separator();
-
             // Preset selector
             ui.heading("Preset");
             ui.horizontal(|ui| {
