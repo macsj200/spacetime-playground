@@ -70,6 +70,9 @@ impl App {
             .copied()
             .unwrap_or(surface_caps.formats[0]);
 
+        // On macOS/Metal, latency 2 can cause get_current_texture() to block when the drawable
+        // pool is exhausted; use 1 to avoid post-first-frame freeze.
+        let max_frame_latency: u32 = if cfg!(target_os = "macos") { 1 } else { 2 };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -78,7 +81,7 @@ impl App {
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: max_frame_latency,
         };
         surface.configure(&device, &config);
 
@@ -105,8 +108,10 @@ impl App {
             camera,
             simulation: Simulation::new(Preset::Single),
             ui_state: UiState::default(),
-            max_steps: 600,
-            step_size: 0.1,
+            // GPU cost: lower max_steps / higher step_size = less work per frame (fewer RK4 steps per ray).
+            // On macOS we use low defaults to avoid main-thread block on present(); tune here to binary-search.
+            max_steps: if cfg!(target_os = "macos") { 80 } else { 600 },
+            step_size: if cfg!(target_os = "macos") { 0.4 } else { 0.1 },
             egui_ctx,
             egui_winit,
             egui_renderer,
@@ -157,6 +162,9 @@ impl App {
                     }
                     if key == KeyCode::F12 && event.state == ElementState::Pressed {
                         self.ui_state.screenshot_requested = true;
+                    }
+                    if key == KeyCode::F2 && event.state == ElementState::Pressed {
+                        self.ui_state.debug_checkerboard = !self.ui_state.debug_checkerboard;
                     }
                     self.camera.handle_key(key, event.state);
                 }
@@ -214,7 +222,11 @@ impl App {
             disk_enabled: if self.ui_state.disk_enabled { 1 } else { 0 },
             background_mode: self.ui_state.background_mode,
             time: self.start_time.elapsed().as_secs_f32(),
-            _padding: [0.0; 3],
+            _padding: [
+                if self.ui_state.debug_checkerboard { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
         };
         self.pipeline.update_uniforms(&self.queue, &uniforms);
 
@@ -273,14 +285,35 @@ impl App {
             &screen_descriptor,
         );
 
+        // Single encoder + single submit per frame to avoid Metal drawable/sync issues.
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Main Encoder"),
+                label: Some("Frame Encoder"),
             });
 
         self.pipeline.dispatch_compute(&mut encoder);
         self.pipeline.render_fullscreen(&mut encoder, &view);
+
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("egui Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                })
+                .forget_lifetime();
+            self.egui_renderer
+                .render(&mut pass, &paint_jobs, &screen_descriptor);
+        }
 
         self.queue.submit(std::iter::once(encoder.finish()));
 
@@ -289,37 +322,18 @@ impl App {
             self.pipeline.capture_screenshot(&self.device, &self.queue);
         }
 
-        let mut egui_encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("egui Encoder"),
-            });
-        let mut pass = egui_encoder
-            .begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("egui Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            })
-            .forget_lifetime();
-        self.egui_renderer
-            .render(&mut pass, &paint_jobs, &screen_descriptor);
-        drop(pass);
-
-        self.queue.submit(std::iter::once(egui_encoder.finish()));
         output.present();
 
         for id in &full_output.textures_delta.free {
             self.egui_renderer.free_texture(id);
         }
 
+        self.window.request_redraw();
+    }
+
+    /// Request the next frame. Exposed so the event loop can drive redraws from about_to_wait
+    /// when the platform (e.g. macOS) does not reliably deliver RedrawRequested after we request it.
+    pub fn request_redraw(&self) {
         self.window.request_redraw();
     }
 }

@@ -37,3 +37,24 @@ impl Default for Uniforms {
         }
     }
 }
+
+/// Single-body uniform layout (pre–multi-body). Used on macOS fallback path to avoid Metal lockup.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Pod, Zeroable)]
+pub struct SingleBodyUniforms {
+    pub camera_pos: [f32; 4],
+    pub camera_forward: [f32; 4],
+    pub camera_up: [f32; 4],
+    pub camera_right: [f32; 4],
+    pub resolution: [f32; 2],
+    pub fov: f32,
+    pub rs: f32,
+    pub max_steps: u32,
+    pub step_size: f32,
+    pub disk_enabled: u32,
+    pub disk_inner: f32,
+    pub disk_outer: f32,
+    pub background_mode: u32,
+    pub time: f32,
+    pub _padding: f32,
+}

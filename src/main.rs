@@ -6,14 +6,20 @@ mod simulation;
 mod ui;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{WindowAttributes, WindowId};
+
+/// Only request a redraw when this much time has passed (~60 FPS).
+const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
 struct SpacetimeApp {
     app: Option<app::App>,
+    /// When we last requested a redraw (throttles to ~60 FPS, keeps input responsive).
+    last_redraw_request: Instant,
 }
 
 impl ApplicationHandler for SpacetimeApp {
@@ -54,6 +60,17 @@ impl ApplicationHandler for SpacetimeApp {
 
         app.handle_window_event(&event);
     }
+
+    /// Request a redraw only when 1/60s has passed (throttle). We use Poll so the loop never
+    /// blocks and input is processed every iteration; without throttling we'd render at max rate.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(app) = &self.app {
+            if Instant::now().duration_since(self.last_redraw_request) >= FRAME_INTERVAL {
+                self.last_redraw_request = Instant::now();
+                app.request_redraw();
+            }
+        }
+    }
 }
 
 fn main() {
@@ -65,8 +82,11 @@ fn main() {
     }
 
     let event_loop = EventLoop::new().unwrap();
-    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = SpacetimeApp { app: None };
+    let mut app = SpacetimeApp {
+        app: None,
+        last_redraw_request: Instant::now(),
+    };
     event_loop.run_app(&mut app).unwrap();
 }

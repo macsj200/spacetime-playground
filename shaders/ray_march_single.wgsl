@@ -5,32 +5,22 @@ struct Uniforms {
     camera_right: vec4<f32>,
     resolution: vec2<f32>,
     fov: f32,
-    num_bodies: u32,
+    rs: f32,
     max_steps: u32,
     step_size: f32,
     disk_enabled: u32,
-    background_mode: u32,
-    time: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-};
-
-struct Body {
-    position: vec4<f32>,
-    rs: f32,
     disk_inner: f32,
     disk_outer: f32,
+    background_mode: u32,
+    time: f32,
     _padding: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(2) var<storage, read> bodies: array<Body>;
 
 const PI: f32 = 3.14159265358979;
-const MAX_BODIES: u32 = 8u;
-const ESCAPE_RADIUS: f32 = 50.0;
+const SKY_RADIUS: f32 = 30.0;
 
 // ── Hash / noise ──────────────────────────────────────────────────────
 
@@ -44,10 +34,11 @@ fn hash22(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(hash21(p), hash21(p + vec2<f32>(127.1, 311.7)));
 }
 
+// Smooth value noise for disk turbulence
 fn value_noise(p: vec2<f32>) -> f32 {
     let i = floor(p);
     let f = fract(p);
-    let sm = f * f * (3.0 - 2.0 * f);
+    let sm = f * f * (3.0 - 2.0 * f); // smoothstep interpolation
 
     let a = hash21(i);
     let b = hash21(i + vec2<f32>(1.0, 0.0));
@@ -137,15 +128,9 @@ fn background(theta: f32, phi: f32) -> vec3<f32> {
     return checkerboard(theta, phi);
 }
 
-fn dir_to_spherical(dir: vec3<f32>) -> vec2<f32> {
-    let r = length(dir);
-    let theta = acos(clamp(dir.y / r, -1.0, 1.0));
-    let phi = atan2(dir.z, dir.x) + PI;
-    return vec2<f32>(theta, phi);
-}
-
 // ── Accretion disk ────────────────────────────────────────────────────
 
+// Tanner Helland blackbody approximation
 fn blackbody(temp: f32) -> vec3<f32> {
     let t = temp / 100.0;
     var r: f32;
@@ -171,32 +156,37 @@ fn blackbody(temp: f32) -> vec3<f32> {
     return vec3<f32>(r, g, b);
 }
 
-fn disk_detail(r: f32, azimuth: f32, rs: f32, disk_inner: f32) -> f32 {
+// Procedural disk detail: subtle density variations
+fn disk_detail(r: f32, azimuth: f32, rs: f32) -> f32 {
     let rn = r / rs;
     var detail = 1.0;
 
+    // Subtle broad ring variations (not sharp bands)
     detail *= 0.95 + 0.05 * sin(rn * 6.0);
     detail *= 0.97 + 0.03 * sin(rn * 15.0 + 2.0);
 
+    // Spiral density waves (subtle)
     let spiral = sin(azimuth * 2.0 - rn * 4.0 + u.time * 0.2);
     detail *= 0.96 + 0.04 * spiral;
 
+    // Smooth turbulence
     let noise_uv = vec2<f32>(rn * 4.0, azimuth * 3.0 / PI);
     let turb = fbm(noise_uv);
     detail *= 0.88 + 0.12 * turb;
 
+    // Brighter flares near inner edge
     let inner_turb = fbm(vec2<f32>(azimuth * 5.0 / PI + u.time * 0.15, rn * 10.0));
-    let inner_weight = exp(-max(rn - disk_inner / rs, 0.0) * 1.5);
+    let inner_weight = exp(-max(rn - u.disk_inner / rs, 0.0) * 1.5);
     detail += inner_turb * inner_weight * 0.2;
 
     return max(detail, 0.0);
 }
 
-fn disk_color_for_body(pos: vec3<f32>, body_pos: vec3<f32>, rs: f32, disk_inner: f32, disk_outer: f32) -> vec3<f32> {
-    let delta = pos - body_pos;
-    let r = length(vec2<f32>(delta.x, delta.z));
-    let azimuth = atan2(delta.z, delta.x) + u.time * 0.5;
+fn disk_color(r: f32, azimuth: f32, rs: f32) -> vec3<f32> {
+    let inner = u.disk_inner;
 
+    // Novikov-Thorne luminosity profile for thin disk
+    // L(r) ~ 1/r² * (1 - sqrt(r_isco/r)) for r > r_isco
     let r_isco = 3.0 * rs;
     var luminosity: f32;
     if r > r_isco {
@@ -204,93 +194,44 @@ fn disk_color_for_body(pos: vec3<f32>, body_pos: vec3<f32>, rs: f32, disk_inner:
     } else {
         luminosity = 0.0;
     }
-    let r_peak = r_isco * 49.0 / 36.0;
+    // Normalize so peak luminosity ≈ 1
+    let r_peak = r_isco * 49.0 / 36.0; // peak of Novikov-Thorne profile
     let l_peak = (1.0 / (r_peak * r_peak)) * (1.0 - sqrt(r_isco / r_peak));
     luminosity = luminosity / max(l_peak, 0.001);
 
-    let t_normalized = pow(clamp(disk_inner / r, 0.0, 1.0), 0.75);
+    // Temperature profile: T ~ (L/r²)^(1/4) ~ r^(-3/4) approximately
+    let t_normalized = pow(clamp(inner / r, 0.0, 1.0), 0.75);
     let temp = mix(1500.0, 6500.0, t_normalized);
     var col = blackbody(temp);
 
-    let detail = disk_detail(r, azimuth, rs, disk_inner);
+    // Apply luminosity and detail
+    let detail = disk_detail(r, azimuth, rs);
     col = col * luminosity * detail * 3.0;
 
-    // Doppler shift from Keplerian orbital velocity
+    // Doppler shift from Keplerian orbital velocity: v = sqrt(M/r) = sqrt(rs/(2r))
     let v_orb = sqrt(rs / (2.0 * r));
     let doppler = 1.0 / (1.0 + v_orb * sin(azimuth));
     let doppler3 = doppler * doppler * doppler;
     col = col * clamp(doppler3, 0.1, 4.0);
 
-    // Gravitational redshift from all bodies
-    var grav_potential = 0.0;
-    for (var i = 0u; i < u.num_bodies; i = i + 1u) {
-        let bp = bodies[i].position.xyz;
-        let dist = length(pos - bp);
-        if dist > 0.01 {
-            grav_potential += bodies[i].rs / dist;
-        }
-    }
-    let grav_redshift = sqrt(max(1.0 - grav_potential, 0.001));
+    // Gravitational redshift
+    let grav_redshift = sqrt(max(1.0 - rs / r, 0.001));
     col = col * grav_redshift;
-
-    // Soft outer edge
-    let outer_fade = 1.0 - smoothstep(disk_outer - 1.0 * rs, disk_outer, r);
-    col = col * outer_fade;
 
     return col;
 }
 
-// ── Multi-body gravitational acceleration ─────────────────────────────
+// ── Geometry / integration ────────────────────────────────────────────
 
-fn gravitational_acceleration(pos: vec3<f32>, vel: vec3<f32>) -> vec3<f32> {
-    var accel = vec3<f32>(0.0);
-
-    for (var i = 0u; i < u.num_bodies; i = i + 1u) {
-        let body_pos = bodies[i].position.xyz;
-        let rs_i = bodies[i].rs;
-        let delta = pos - body_pos;
-        let r = length(delta);
-
-        // Skip if too close (inside event horizon)
-        if r < rs_i * 0.5 {
-            continue;
-        }
-
-        let r2 = r * r;
-        let r5 = r2 * r2 * r;
-
-        // |cross(delta, vel)|^2
-        let c = cross(delta, vel);
-        let L2 = dot(c, c);
-
-        // a = -1.5 * rs / r^5 * L^2 * delta
-        accel -= 1.5 * rs_i / r5 * L2 * delta;
-    }
-
-    return accel;
+fn dir_to_spherical(dir: vec3<f32>) -> vec2<f32> {
+    let r = length(dir);
+    let theta = acos(clamp(dir.y / r, -1.0, 1.0));
+    let phi = atan2(dir.z, dir.x) + PI;
+    return vec2<f32>(theta, phi);
 }
 
-fn check_capture(pos: vec3<f32>) -> i32 {
-    for (var i = 0u; i < u.num_bodies; i = i + 1u) {
-        let body_pos = bodies[i].position.xyz;
-        let rs_i = bodies[i].rs;
-        let r = length(pos - body_pos);
-        if r < rs_i {
-            return i32(i);
-        }
-    }
-    return -1i;
-}
-
-fn check_escape(pos: vec3<f32>) -> bool {
-    for (var i = 0u; i < u.num_bodies; i = i + 1u) {
-        let body_pos = bodies[i].position.xyz;
-        let r = length(pos - body_pos);
-        if r < ESCAPE_RADIUS {
-            return false;
-        }
-    }
-    return true;
+fn orbit_rhs_w(u_val: f32, rs: f32) -> f32 {
+    return -u_val + 1.5 * rs * u_val * u_val;
 }
 
 // ACES filmic tonemapping
@@ -314,14 +255,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Debug: just draw a checkerboard (no ray march, no bodies). Use _pad0 > 0.5 to enable.
-    if u._pad0 > 0.5 {
-        let check = (pixel.x / 32 + pixel.y / 32) % 2;
-        let c = select(0.2, 0.9, check == 0);
-        textureStore(output, pixel, vec4<f32>(c, c, c, 1.0));
-        return;
-    }
-
     let ndc = vec2<f32>(
         (f32(pixel.x) + 0.5 - f32(dims.x) * 0.5) / (f32(dims.x) * 0.5),
         -(f32(pixel.y) + 0.5 - f32(dims.y) * 0.5) / (f32(dims.y) * 0.5),
@@ -335,107 +268,112 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         + ndc.y * half_fov * u.camera_up.xyz
     );
 
-    // 3D ray integration state
-    var pos = u.camera_pos.xyz;
-    var vel = ray_dir; // normalized direction (null geodesic, speed = 1)
+    let cam_pos = u.camera_pos.xyz;
+    let cam_r = length(cam_pos);
+    let rs = u.rs;
 
-    let dt = u.step_size;
+    let r_hat = cam_pos / cam_r;
+    let cos_angle = dot(ray_dir, r_hat);
+    let sin_angle = sqrt(max(1.0 - cos_angle * cos_angle, 0.0));
+
+    var u_val = 1.0 / cam_r;
+    var w_val = 0.0;
+    if sin_angle > 1e-6 {
+        w_val = -cos_angle / (cam_r * sin_angle);
+    }
+
+    var tangent = ray_dir - cos_angle * r_hat;
+    let tang_len = length(tangent);
+    if tang_len > 1e-6 {
+        tangent = tangent / tang_len;
+    } else {
+        tangent = vec3<f32>(1.0, 0.0, 0.0);
+    }
+
+    let dphi = u.step_size;
+    var phi_total = 0.0;
     var captured = false;
     var escaped = false;
 
-    // Disk crossing state
+    // Disk: first equatorial crossing only (avoids secondary image artifacts)
     var disk_color_accum = vec3<f32>(0.0);
     var disk_hit = false;
-    var prev_y = pos.y;
 
-    // RK4 integration in 3D
+    let initial_angle = atan2(sin_angle, -cos_angle);
+    var prev_y = cam_pos.y;
+    var prev_u = u_val;
+    var prev_phi = 0.0;
+
+    // RK4 integration
     for (var i = 0u; i < u.max_steps; i = i + 1u) {
-        // Check capture
-        if check_capture(pos) >= 0i {
+        if u_val > 1.0 / rs {
             captured = true;
             break;
         }
-
-        // Check escape
-        if check_escape(pos) {
+        if u_val < 1.0 / SKY_RADIUS && w_val < 0.0 {
             escaped = true;
             break;
         }
 
-        // Store pre-step y for disk crossing detection
-        let y_before = pos.y;
-        let pos_before = pos;
+        // Store pre-step values for interpolation
+        let u_before = u_val;
+        let phi_before = phi_total;
 
-        // RK4 step: state = (pos, vel), derivative = (vel, accel)
-        let a1 = gravitational_acceleration(pos, vel);
-        let k1_pos = vel;
-        let k1_vel = a1;
+        // RK4 step
+        let k1_u = w_val;
+        let k1_w = orbit_rhs_w(u_val, rs);
 
-        let p2 = pos + 0.5 * dt * k1_pos;
-        let v2 = vel + 0.5 * dt * k1_vel;
-        let a2 = gravitational_acceleration(p2, v2);
-        let k2_pos = v2;
-        let k2_vel = a2;
+        let u2 = u_val + 0.5 * dphi * k1_u;
+        let w2 = w_val + 0.5 * dphi * k1_w;
+        let k2_u = w2;
+        let k2_w = orbit_rhs_w(u2, rs);
 
-        let p3 = pos + 0.5 * dt * k2_pos;
-        let v3 = vel + 0.5 * dt * k2_vel;
-        let a3 = gravitational_acceleration(p3, v3);
-        let k3_pos = v3;
-        let k3_vel = a3;
+        let u3 = u_val + 0.5 * dphi * k2_u;
+        let w3 = w_val + 0.5 * dphi * k2_w;
+        let k3_u = w3;
+        let k3_w = orbit_rhs_w(u3, rs);
 
-        let p4 = pos + dt * k3_pos;
-        let v4 = vel + dt * k3_vel;
-        let a4 = gravitational_acceleration(p4, v4);
-        let k4_pos = v4;
-        let k4_vel = a4;
+        let u4 = u_val + dphi * k3_u;
+        let w4 = w_val + dphi * k3_w;
+        let k4_u = w4;
+        let k4_w = orbit_rhs_w(u4, rs);
 
-        pos = pos + (dt / 6.0) * (k1_pos + 2.0 * k2_pos + 2.0 * k3_pos + k4_pos);
-        vel = vel + (dt / 6.0) * (k1_vel + 2.0 * k2_vel + 2.0 * k3_vel + k4_vel);
+        u_val = u_val + (dphi / 6.0) * (k1_u + 2.0 * k2_u + 2.0 * k3_u + k4_u);
+        w_val = w_val + (dphi / 6.0) * (k1_w + 2.0 * k2_w + 2.0 * k3_w + k4_w);
+        phi_total = phi_total + dphi;
 
-        // Disk crossing detection
-        if u.disk_enabled == 1u && !disk_hit {
-            let cur_y = pos.y;
-            if y_before * cur_y < 0.0 {
-                // Interpolate crossing point
-                let t_cross = abs(y_before) / (abs(y_before) + abs(cur_y));
-                let cross_pos = pos_before + t_cross * (pos - pos_before);
+        // Disk crossing detection with sub-step interpolation
+        if u.disk_enabled == 1u {
+            let r_now = 1.0 / max(u_val, 1e-8);
+            let pos_3d = r_now * (cos(phi_total) * r_hat + sin(phi_total) * tangent);
+            let cur_y = pos_3d.y;
 
+            if prev_y * cur_y < 0.0 && !disk_hit {
+                // First equatorial crossing — interpolate exact crossing point
+                let t_cross = abs(prev_y) / (abs(prev_y) + abs(cur_y));
+                let cross_phi = phi_before + t_cross * dphi;
+                let cross_u = u_before + t_cross * (u_val - u_before);
+                let cross_r = 1.0 / max(cross_u, 1e-8);
+                let cross_pos = cross_r * (cos(cross_phi) * r_hat + sin(cross_phi) * tangent);
+
+                // Mark that we've crossed the plane (stop checking further crossings)
                 disk_hit = true;
 
-                // Check each body's disk
-                for (var b = 0u; b < u.num_bodies; b = b + 1u) {
-                    let body_pos = bodies[b].position.xyz;
-                    let delta = cross_pos - body_pos;
-                    let r_disk = length(vec2<f32>(delta.x, delta.z));
+                if cross_r > u.disk_inner && cross_r < u.disk_outer {
+                    let azimuth = atan2(cross_pos.z, cross_pos.x) + u.time * 0.5;
+                    let col = disk_color(cross_r, azimuth, rs);
 
-                    if r_disk > bodies[b].disk_inner && r_disk < bodies[b].disk_outer {
-                        let col = disk_color_for_body(
-                            cross_pos,
-                            body_pos,
-                            bodies[b].rs,
-                            bodies[b].disk_inner,
-                            bodies[b].disk_outer
-                        );
-                        // Additive blending for overlapping disks
-                        disk_color_accum += col;
-                    }
+                    // Soft outer edge only (inner edge handled by Novikov-Thorne luminosity)
+                    let outer_fade = 1.0 - smoothstep(u.disk_outer - 1.0 * rs, u.disk_outer, cross_r);
+                    disk_color_accum = col * outer_fade;
                 }
             }
+            prev_y = cur_y;
         }
     }
 
-    // If we ran out of steps, determine outcome from velocity
     if !captured && !escaped {
-        // Check if heading away from all bodies
-        var heading_away = true;
-        for (var i = 0u; i < u.num_bodies; i = i + 1u) {
-            let delta = pos - bodies[i].position.xyz;
-            if dot(vel, delta) < 0.0 {
-                heading_away = false;
-                break;
-            }
-        }
-        if heading_away {
+        if w_val < 0.0 {
             escaped = true;
         } else {
             captured = true;
@@ -445,13 +383,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // ── Coloring ──
 
     var color = vec3<f32>(0.0);
-    let has_disk = disk_hit && (disk_color_accum.x > 0.0 || disk_color_accum.y > 0.0 || disk_color_accum.z > 0.0);
 
-    if has_disk {
+    if disk_hit && (disk_color_accum.x > 0.0 || disk_color_accum.y > 0.0 || disk_color_accum.z > 0.0) {
         if escaped {
-            let exit_dir = normalize(vel);
+            let exit_phi = initial_angle + phi_total;
+            let exit_dir = cos(exit_phi) * (-r_hat) + sin(exit_phi) * tangent;
             let angles = dir_to_spherical(exit_dir);
             let bg = background(angles.x, angles.y);
+            // Blend disk over background based on disk brightness
             let disk_lum = max(disk_color_accum.x, max(disk_color_accum.y, disk_color_accum.z));
             let opacity = clamp(disk_lum, 0.0, 1.0);
             color = mix(bg, disk_color_accum, opacity);
@@ -459,14 +398,17 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             color = disk_color_accum;
         }
     } else if captured {
+        // Pure black shadow
         color = vec3<f32>(0.0);
     } else {
-        let exit_dir = normalize(vel);
+        let exit_phi = initial_angle + phi_total;
+        let exit_dir = cos(exit_phi) * (-r_hat) + sin(exit_phi) * tangent;
         let angles = dir_to_spherical(exit_dir);
         color = background(angles.x, angles.y);
     }
 
-    // ACES tonemapping
+    // ACES tonemapping for HDR → display
+    // (sRGB surface handles gamma — no manual pow needed)
     color = aces(color);
 
     textureStore(output, pixel, vec4<f32>(color, 1.0));
