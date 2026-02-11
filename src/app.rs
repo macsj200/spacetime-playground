@@ -105,8 +105,10 @@ impl App {
             camera,
             simulation: Simulation::new(Preset::Single),
             ui_state: UiState::default(),
-            max_steps: 600,
-            step_size: 0.1,
+            // GPU cost: lower max_steps / higher step_size = less work per frame (fewer RK4 steps per ray).
+            // On macOS we use low defaults to avoid main-thread block on present(); tune here to binary-search.
+            max_steps: if cfg!(target_os = "macos") { 80 } else { 600 },
+            step_size: if cfg!(target_os = "macos") { 0.4 } else { 0.1 },
             egui_ctx,
             egui_winit,
             egui_renderer,
